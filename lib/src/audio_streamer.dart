@@ -40,33 +40,56 @@ class mAudioStreamer {
   ReceivePort receivePort = ReceivePort(); // 수신 포트 설정
   IOWebSocketChannel? channel; // 웹소켓 채널 객체
 
-  // double? dynamic_energy_adjustment_damping = 0.15;
-  // double? dynamic_energy_ratio = 1.5; // 민감도: 높은 값을 잡을 수록 작은 소리에는 오디오 전송을 시작하지 않음
-  double? energy_threshold = 0.1;
   double? energy;
   bool? prevSpeakingState;
 
   double minBufferSize = ZerothDefine.ZEROTH_RATE_44 / 2;
   double? lte; // 장기 에너지
   List<double> newAudio = [];
+  int index = 0;
+  int receivedIndex = 0;
 
   mAudioStreamer() {
     _init();
     receivePort.listen((message) {
+
+      // JSON 문자열을 디코드하여 Dart의 Map 객체로 변환
+      final decodedMessage = jsonDecode(message);
+
+      // 디코드된 메시지에서 'message'와 'index' 값 추출
+      final responseMessage = decodedMessage['message'];
+      final responseIndex = decodedMessage['index'];
+
       //서버로부터 메시지를 받음
       // 모든 데이터를 받으면 웹소켓 채널을 닫음
-      if (message == "END_OF_DATA") {
+      if (responseMessage == "END_OF_DATA") {
         // 서버가 모든 데이터를 받았다는 메시지를 받으면
-        print("EOD");
+        print("vad: EOD");
         channel?.sink.close(); // 웹소켓 채널 닫음
         audio.clear(); // 오디오 데이터
         prevAudio.clear();
-        receivedText.value = List.empty(); // 녹음이 중지되면 서버에서 받아오기 위해 사용했던 변수를 비워줌
+        // receivedText.value = List.empty(); // 녹음이 중지되면 서버에서 받아오기 위해 사용했던 변수를 비워줌
       } else {
-        // 서버로부터 메시지를 받아 저장
-        receivedText.value = List.empty(); // 실시간으로 받아오고 있기 때문에, 받아올 때마다 비워주어야함.
-        // print("eod: msg $message");
-        receivedText.value = List.from(receivedText.value)..add(message);
+        //TODO: 보낸 메시지의 개수만큼 순차적으로 메시지를 받음
+        //TODO: 바로 그 다음 메시지가 들어오지 않으면 기다렸다가 업데이트함
+        List<String> newList = List.from(receivedText.value);
+
+        if (receivedText.value.length < responseIndex) {
+          // // 필요한 만큼 리스트의 크기를 확장하고, 빈 값으로 채움
+          // receivedText.value = List.filled(responseIndex + 1, '', growable: true);
+          receivedText.value = List.filled(responseIndex + 1, '', growable: true);
+          // receivedText.value.add(''); // 크기를 한 칸 키움
+        }
+
+        // 기존의 값 업데이트
+        for(int i=0; i<responseIndex; i++){
+          receivedText.value[i] = newList[i];
+        }
+
+        // 새로운 메시지를 업데이트
+        receivedText.value[responseIndex - 1] = responseMessage;
+        receivedText.notifyListeners();
+        print("vad: receivedText.value ${receivedText.value.join(', ')}");
       }
     });
   }
@@ -90,6 +113,7 @@ class mAudioStreamer {
     if (!(await checkPermission())) {
       await requestPermission();
     }
+    receivedText.value = List.empty();
 
     prevSpeakingState = false;
 
@@ -104,6 +128,7 @@ class mAudioStreamer {
     lastSpokeAt = DateTime.now();
 
     lte = null;
+    index = 0;
 
     // 녹음중 유무 변수를 업데이트
     isRecording.value = true;
@@ -111,7 +136,6 @@ class mAudioStreamer {
 
   /// 오디오 샘플링을 멈추고 변수를 초기화
   Future<void> stopRecording() async {
-    audio.clear();
     // 의미 없는 오디오 조건:
     // 현재 오디오 의미 없을 때 이전 오디오만 전송
     if (audio.length < minBufferSize) {
@@ -123,9 +147,9 @@ class mAudioStreamer {
       // print("eod: useful current audio. send prev, current audio");
       print("vad: current meaningful audio.");
       sendAudio(audioBuffer: prevAudio, isFinal: false);
-      sendAudio(audioBuffer: audio, isFinal: true);
+      sendAudio(audioBuffer: newAudio, isFinal: true);
     }
-
+    audio.clear();
     audioSubscription?.cancel();
     isBufferUpdated = false;
     lastSpokeAt = null;
@@ -175,7 +199,7 @@ class mAudioStreamer {
 
     // 오디오 버퍼가 6400씩 증가할 때마다 로그가 한번 찍힘
     // TODO: false일 때 오디오 버퍼의 일부를 저장해서 말마디 앞부분이 잘리지 않도록? 그냥 저장하면 너무 길다.
-      print("vad: isSpeaking $isSpeaking // STE = $ste // LTE = $lte // audio.length ${audio.length}");
+      print("vad: isSpeaking $isSpeaking // STE = $ste // LTE = $lte // audio.length ${newAudio.length}");
   }
 
   ///침묵을 감지하는 함수
@@ -197,16 +221,16 @@ class mAudioStreamer {
     return ste;
   }
 
-  /// 음성 진폭의 rms에 따라 isSpeaking을 업데이트해주는 메소드
-  void updateSpeakingStatus() {
-    prevSpeakingState = isSpeaking;
-    if (energy! > energy_threshold!) {
-      lastSpokeAt = DateTime.now();
-      isSpeaking = true;
-    } else {
-      isSpeaking = false;
-    }
-  }
+  // /// 음성 진폭의 rms에 따라 isSpeaking을 업데이트해주는 메소드
+  // void updateSpeakingStatus() {
+  //   prevSpeakingState = isSpeaking;
+  //   if (energy! > energy_threshold!) {
+  //     lastSpokeAt = DateTime.now();
+  //     isSpeaking = true;
+  //   } else {
+  //     isSpeaking = false;
+  //   }
+  // }
 
 
   ///웹소켓 통신으로 실제로 wav를 isolate로 전송
@@ -220,12 +244,14 @@ class mAudioStreamer {
     if (audioBuffer.isNotEmpty) {
       print("vad: sendAudio bufferSize in if ${audioBuffer.length}");
 
-      // 웹소켓을 통해 wav 전송
+      index ++;
 
+      // 웹소켓을 통해 wav 전송
       Isolate.spawn(sendOverWebSocket, {
         'wavData': wavData,
         'sendPort': receivePort.sendPort,
         'isFinal': isFinal, // 마지막 데이터인지 나타내는 변수 추가
+        'index' : index,
       });
     }
   }
@@ -235,6 +261,7 @@ class mAudioStreamer {
     final wavData = args['wavData'];
     final sendPort = args['sendPort'];
     final isFinal = args['isFinal'];
+    final index = args['index'];
 
     //채널 설정
     final channel = IOWebSocketChannel.connect(ZerothDefine.MY_URL_test);
@@ -246,10 +273,20 @@ class mAudioStreamer {
     channel.sink.add(jsonEncode({
       'wavData': base64WavData,
       'isFinal': isFinal,
+      'index' : index,
     }));
 
     // 서버로부터의 응답을 받아 메인 Isolate로 전송
     channel.stream.listen((message) {
+      // // 서버로부터 받은 메시지를 JSON 객체로 디코드
+      // final decodedMessage = jsonDecode(message);
+      //
+      // // 디코드된 메시지에서 필요한 정보 추출
+      // final responseMessage = decodedMessage['message'];
+      // final responseIndex = decodedMessage['index'];
+      //
+      // // 메시지를 메인 Isolate로 전송
+      // sendPort.send(decodedMessage);
       sendPort.send(message);
     });
   }

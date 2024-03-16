@@ -31,7 +31,7 @@ class MyTextFieldState extends State<MyTextField> {
   void initState() {
     super.initState();
     // 텍스트를 변경하는 컨트롤러 변수 설정
-    _controller = TextEditingController(text: widget.receivedText.value.join('\n'));
+    _controller = TextEditingController(text: widget.receivedText.value.join(''));
     Provider.of<TextStoreModel>(context, listen: false).setController(_controller);
     // 텍스트를 업데이트하는 리스너 추가
     widget.receivedText.addListener(_updateText);
@@ -46,11 +46,26 @@ class MyTextFieldState extends State<MyTextField> {
     super.dispose();
   }
 
+  // /// 텍스트를 업데이트하는 함수
+  // void _updateText() {
+  //   List<String> lines = widget.receivedText.value; // 텍스트 리스트 받아오기
+  //   String text = lines.join(''); // 줄 바꿈 문자로 각 줄을 합치기
+  //   // _controller.text = '${_controller.text} $text'; // 텍스트 필드 업데이트
+  //   _controller.text = text; // 텍스트 필드 업데이트
+  // }
+
   /// 텍스트를 업데이트하는 함수
   void _updateText() {
     List<String> lines = widget.receivedText.value; // 텍스트 리스트 받아오기
-    String text = lines.join("\n"); // 줄 바꿈 문자로 각 줄을 합치기
-    _controller.text = '${_controller.text} $text'; // 텍스트 필드 업데이트
+    String newText = lines.join(''); // 줄 바꿈 문자로 각 줄을 합치기
+
+    // 현재 텍스트 필드의 상태(커서 위치, 선택 상태 등)를 유지하면서 텍스트 내용만 업데이트
+    final currentValue = _controller.value;
+    _controller.value = currentValue.copyWith(
+      text: newText,
+      selection: currentValue.selection,
+      composing: TextRange.empty,
+    );
   }
 
   @override
@@ -93,8 +108,4 @@ class MyTextFieldState extends State<MyTextField> {
       ),
     );
   }
-
-
-
-
 }
